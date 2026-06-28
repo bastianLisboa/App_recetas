@@ -1,0 +1,1 @@
+Run the final GeoHints V10 atlas build with real photographs for every reference card.
