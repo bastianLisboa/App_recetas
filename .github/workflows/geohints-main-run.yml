@@ -7,13 +7,30 @@ concurrency:
   group: geohints-main-atlas
   cancel-in-progress: true
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+      - name: Publish run marker
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          data={'run_id':int(os.environ['RUN_ID']),'run_attempt':int(os.environ['RUN_ATTEMPT']),'head_sha':os.environ['HEAD_SHA'],'status':'started','updated_at':datetime.now(timezone.utc).isoformat(),'artifact_name':'Guia_GeoHints_V10_Atlas_Fotografico_Completo_Main'}
+          open('geohints_run_status.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add geohints_run_status.json
+          git commit -m "Record GeoHints build run $RUN_ID"
+          git push
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -111,3 +128,27 @@ jobs:
             geohints/logs/
           retention-days: 7
           compression-level: 6
+      - name: Publish final run marker
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          HEAD_SHA: ${{ github.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          git pull --rebase
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          data={'run_id':int(os.environ['RUN_ID']),'run_attempt':int(os.environ['RUN_ATTEMPT']),'head_sha':os.environ['HEAD_SHA'],'status':os.environ['JOB_STATUS'],'updated_at':datetime.now(timezone.utc).isoformat(),'artifact_name':'Guia_GeoHints_V10_Atlas_Fotografico_Completo_Main'}
+          audit=Path('geohints/final/Guia_GeoHints_V10_Auditoria_Global.json')
+          if audit.exists():
+              source=json.loads(audit.read_text(encoding='utf-8'))
+              for key in ['countries_and_territories','total_reference_cards','exact_country_category_photos','contextual_real_photos_from_correct_country','cards_without_verified_photo','unique_photos','reused_cards','generated_or_illustrated_images','pdf_pages']:
+                  data[key]=source.get(key)
+          Path('geohints_run_status.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+          git add geohints_run_status.json
+          git commit -m "Update GeoHints build run $RUN_ID status" || true
+          git push
