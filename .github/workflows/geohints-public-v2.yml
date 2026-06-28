@@ -5,6 +5,9 @@ on:
     paths:
       - 'geohints/**'
       - '.github/workflows/geohints-public-v2.yml'
+concurrency:
+  group: geohints-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
