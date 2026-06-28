@@ -1,0 +1,155 @@
+name: Build GeoHints V10 complete real-photo atlas V2
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'geohints/**'
+      - '.github/workflows/geohints-public-v2.yml'
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-dejavu-core
+          pip install requests pillow reportlab pypdf pycountry Babel
+      - name: Assemble V2 builder
+        working-directory: geohints
+        run: |
+          cat part1.py part2a.py > build.py
+          base64 -d part2b_v2.b64 >> build.py
+          base64 -d part2c_v3.b64 >> build.py
+          base64 -d part2d_v2.b64 >> build.py
+          base64 -d part3.b64 >> build.py
+          cat part4a.b64 part4b.b64 | base64 -d >> build.py
+          python -m py_compile build.py
+      - name: Build smoke batch
+        working-directory: geohints
+        env:
+          BATCH_ID: 0
+          BATCH_SIZE: 10
+        run: python build.py
+      - name: Validate smoke batch
+        working-directory: geohints
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from pypdf import PdfReader
+          d=Path('out/batch-00')
+          p=d/'GeoHints_Fotos_Batch_00.pdf'
+          a=json.loads((d/'GeoHints_Auditoria_Batch_00.json').read_text(encoding='utf-8'))
+          assert a['batch_size']==10 and a['total_cards']==520
+          assert a['missing_photos']==0
+          assert a['exact_photos']+a['contextual_country_photos']==520
+          assert a['generated_or_illustrated_images']==0
+          assert len(PdfReader(str(p)).pages)==101
+          print({'exact':a['exact_photos'],'contextual':a['contextual_country_photos'],'missing':a['missing_photos'],'unique':a['unique_photos'],'reused':a['reused_cards'],'bytes':p.stat().st_size})
+          PY
+  batches:
+    needs: smoke
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-dejavu-core
+          pip install requests pillow reportlab pypdf pycountry Babel
+      - name: Assemble V2 builder
+        working-directory: geohints
+        run: |
+          cat part1.py part2a.py > build.py
+          base64 -d part2b_v2.b64 >> build.py
+          base64 -d part2c_v3.b64 >> build.py
+          base64 -d part2d_v2.b64 >> build.py
+          base64 -d part3.b64 >> build.py
+          cat part4a.b64 part4b.b64 | base64 -d >> build.py
+          python -m py_compile build.py
+      - name: Build batch
+        working-directory: geohints
+        env:
+          BATCH_ID: ${{ matrix.batch }}
+          BATCH_SIZE: 10
+        run: python build.py
+      - name: Validate batch
+        working-directory: geohints
+        env:
+          BATCH_ID: ${{ matrix.batch }}
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          from pypdf import PdfReader
+          i=int(os.environ['BATCH_ID']);d=Path('out')/f'batch-{i:02d}'
+          p=d/f'GeoHints_Fotos_Batch_{i:02d}.pdf'
+          a=json.loads((d/f'GeoHints_Auditoria_Batch_{i:02d}.json').read_text(encoding='utf-8'))
+          assert a['batch_size']==10 and a['total_cards']==520
+          assert a['missing_photos']==0
+          assert a['exact_photos']+a['contextual_country_photos']==520
+          assert a['generated_or_illustrated_images']==0
+          assert len(PdfReader(str(p)).pages)==101
+          print({'batch':i,'exact':a['exact_photos'],'contextual':a['contextual_country_photos'],'missing':a['missing_photos'],'unique':a['unique_photos'],'reused':a['reused_cards'],'bytes':p.stat().st_size})
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geohints-v2-batch-${{ matrix.batch }}
+          path: geohints/out/batch-*/
+          retention-days: 7
+          compression-level: 6
+  merge:
+    needs: batches
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pypdf
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: geohints-v2-batch-*
+          path: geohints/downloaded-v2
+          merge-multiple: false
+      - name: Merge and validate V2 atlas
+        working-directory: geohints
+        env:
+          DOWNLOAD_DIR: downloaded-v2
+        run: |
+          python merge.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from pypdf import PdfReader
+          d=Path('final');p=d/'Guia_GeoHints_V10_Atlas_Fotografico_250_Paises.pdf'
+          a=json.loads((d/'Guia_GeoHints_V10_Auditoria_Global.json').read_text(encoding='utf-8'))
+          assert a['countries_and_territories']==250
+          assert a['total_reference_cards']==13000
+          assert a['cards_without_verified_photo']==0
+          assert a['exact_country_category_photos']+a['contextual_real_photos_from_correct_country']==13000
+          assert a['generated_or_illustrated_images']==0
+          assert len(PdfReader(str(p)).pages)==2525
+          print({'bytes':p.stat().st_size,'pages':a['pdf_pages'],'exact':a['exact_country_category_photos'],'contextual':a['contextual_real_photos_from_correct_country'],'missing':a['cards_without_verified_photo'],'unique':a['unique_photos'],'reused':a['reused_cards']})
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Guia_GeoHints_V10_Atlas_Fotografico_Completo_V2
+          path: geohints/final/
+          retention-days: 7
+          compression-level: 6
